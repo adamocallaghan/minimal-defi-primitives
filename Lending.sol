@@ -5,8 +5,14 @@ import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract Lending {
+
+    // ########################################
+    // ###            variables             ###
+    // ########################################
+
     mapping(address => address) public s_tokenToPriceFeed;
     address[] public s_allowedTokens;
+
     mapping(address => mapping(address => uint256)) public s_accountToTokenDeposits; // Account -> Token -> Amount
     mapping(address => mapping(address => uint256)) public s_accountToTokenBorrows; // Account -> Token -> Amount
 
@@ -14,30 +20,34 @@ contract Lending {
     uint256 public constant LIQUIDATION_THRESHOLD = 80; // At 80% Loan to Value Ratio, the loan can be liquidated
     uint256 public constant MIN_HEALH_FACTOR = 1e18;
 
+    // ########################################
+    // ###             functions            ###
+    // ########################################
+
+    // ===== DEPOSIT (external) =====
     function deposit(address token, uint256 amount) external {
         s_accountToTokenDeposits[msg.sender][token] += amount;
-        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
     }
 
+    // ===== WITHDRAW (external) =====
     function withdraw(address token, uint256 amount) external {
-        require(s_accountToTokenDeposits[msg.sender][token] >= amount, "Not enough funds");
         _pullFunds(msg.sender, token, amount);
-        require(healthFactor(msg.sender) >= MIN_HEALH_FACTOR, "Platform will go insolvent!");
     }
 
+    // *****  _PULLFUNDS (private) *****
     function _pullFunds(address account, address token, uint256 amount) private {
-        require(s_accountToTokenDeposits[account][token] >= amount, "Not enough funds to withdraw");
         s_accountToTokenDeposits[account][token] -= amount;
-        bool success = IERC20(token).transfer(msg.sender, amount);
+        IERC20(token).transfer(msg.sender, amount);
     }
 
+    // ===== BORROW (external) =====
     function borrow(address token, uint256 amount) external {
-        require(IERC20(token).balanceOf(address(this)) >= amount, "Not enough tokens to borrow");
         s_accountToTokenBorrows[msg.sender][token] += amount;
-        bool success = IERC20(token).transfer(msg.sender, amount);
-        require(healthFactor(msg.sender) >= MIN_HEALH_FACTOR, "Platform will go insolvent!");
+        IERC20(token).transfer(msg.sender, amount);
     }
 
+    // ===== LIQUIDATE (external) =====
     function liquidate(address account, address repayToken, address rewardToken) external {
         require(healthFactor(account) < MIN_HEALH_FACTOR, "Account can't be liquidated!");
         uint256 halfDebt = s_accountToTokenBorrows[account][repayToken] / 2;
@@ -52,14 +62,20 @@ contract Lending {
         _pullFunds(account, rewardToken, totalRewardAmountInRewardToken);
     }
 
+    // ===== REPAY (external) =====
     function repay(address token, uint256 amount) external {
         _repay(msg.sender, token, amount);
     }
 
+    // ***** _REPAY (private) *****
     function _repay(address account, address token, uint256 amount) private {
         s_accountToTokenBorrows[account][token] -= amount;
-        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
     }
+
+    // ########################################
+    // ###          view functions          ###
+    // ########################################
 
     function getAccountInformation(address user) public view returns (uint256 borrowedValueInETH, uint256 collateralValueInETH) {
         borrowedValueInETH = getAccountBorrowedValue(user);
@@ -91,12 +107,6 @@ contract Lending {
     function getEthValue(address token, uint256 amount) public view returns (uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_tokenToPriceFeed[token]);
         (, int256 price, , , ) = priceFeed.latestRoundData();
-        // 2000 DAI = 1 ETH
-        // 0.002 ETH per DAI
-        // price will be something like 20000000000000000
-        // So we multiply the price by the amount, and then divide by 1e18
-        // 2000 DAI * (0.002 ETH / 1 DAI) = 0.002 ETH
-        // (2000 * 10 ** 18) * ((0.002 * 10 ** 18) / 10 ** 18) = 0.002 ETH
         return (uint256(price) * amount) / 1e18;
     }
 
@@ -112,23 +122,5 @@ contract Lending {
             100;
         if (borrowedValueInEth == 0) return 100e18;
         return (collateralAdjustedForThreshold * 1e18) / borrowedValueInEth;
-    }
-
-    /********************/
-    /* DAO / OnlyOwner Functions */
-    /********************/
-    function setAllowedToken(address token, address priceFeed) external onlyOwner {
-        bool foundToken = false;
-        uint256 allowedTokensLength = s_allowedTokens.length;
-        for (uint256 index = 0; index < allowedTokensLength; index++) {
-            if (s_allowedTokens[index] == token) {
-                foundToken = true;
-                break;
-            }
-        }
-        if (!foundToken) {
-            s_allowedTokens.push(token);
-        }
-        s_tokenToPriceFeed[token] = priceFeed;
     }
 }
