@@ -50,8 +50,8 @@ contract Lending {
     // ===== LIQUIDATE (external) =====
     function liquidate(address account, address repayToken, address rewardToken) external {
         require(healthFactor(account) < MIN_HEALH_FACTOR, "Account can't be liquidated!");
-        uint256 halfDebt = s_accountToTokenBorrows[account][repayToken] / 2;
-        uint256 halfDebtInEth = getEthValue(repayToken, halfDebt);
+        uint256 halfDebt = s_accountToTokenBorrows[account][repayToken] / 2; // gets half value of the tokens the borrower has borrowed
+        uint256 halfDebtInEth = getEthValue(repayToken, halfDebt); // converts the half value of the debt to ETH
         require(halfDebtInEth > 0, "Choose a different repayToken!");
         uint256 rewardAmountInEth = (halfDebtInEth * LIQUIDATION_REWARD) / 100;
         uint256 totalRewardAmountInRewardToken = getTokenValueFromEth(
