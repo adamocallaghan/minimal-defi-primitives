@@ -1,44 +1,93 @@
 // SPDX-License-Identifier: MIT
+// This contract is not audited!!!
 pragma solidity ^0.8.7;
 
+// import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+// import "@openzeppelin/contracts/access/Ownable.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+// import "hardhat/console.sol";
+
+// error TransferFailed();
+// error TokenNotAllowed(address token);
+// error NeedsMoreThanZero();
 
 contract Lending {
     mapping(address => address) public s_tokenToPriceFeed;
     address[] public s_allowedTokens;
-    mapping(address => mapping(address => uint256)) public s_accountToTokenDeposits; // Account -> Token -> Amount
-    mapping(address => mapping(address => uint256)) public s_accountToTokenBorrows; // Account -> Token -> Amount
+    // Account -> Token -> Amount
+    mapping(address => mapping(address => uint256)) public s_accountToTokenDeposits;
+    // Account -> Token -> Amount
+    mapping(address => mapping(address => uint256)) public s_accountToTokenBorrows;
 
-    uint256 public constant LIQUIDATION_REWARD = 5; // 5% Liquidation Reward
-    uint256 public constant LIQUIDATION_THRESHOLD = 80; // At 80% Loan to Value Ratio, the loan can be liquidated
+    // 5% Liquidation Reward
+    uint256 public constant LIQUIDATION_REWARD = 5;
+    // At 80% Loan to Value Ratio, the loan can be liquidated
+    uint256 public constant LIQUIDATION_THRESHOLD = 80;
     uint256 public constant MIN_HEALH_FACTOR = 1e18;
 
-    function deposit(address token, uint256 amount) external {
+    // event AllowedTokenSet(address indexed token, address indexed priceFeed);
+    // event Deposit(address indexed account, address indexed token, uint256 indexed amount);
+    // event Borrow(address indexed account, address indexed token, uint256 indexed amount);
+    // event Withdraw(address indexed account, address indexed token, uint256 indexed amount);
+    // event Repay(address indexed account, address indexed token, uint256 indexed amount);
+    // event Liquidate(
+    //     address indexed account,
+    //     address indexed repayToken,
+    //     address indexed rewardToken,
+    //     uint256 halfDebtInEth,
+    //     address liquidator
+    // );
+
+    function deposit(address token, uint256 amount)
+        external
+        // nonReentrant
+        // isAllowedToken(token)
+        // moreThanZero(amount)
+    {
+        // emit Deposit(msg.sender, token, amount);
         s_accountToTokenDeposits[msg.sender][token] += amount;
         bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        // if (!success) revert TransferFailed();
     }
 
-    function withdraw(address token, uint256 amount) external {
+    function withdraw(address token, uint256 amount) external nonReentrant moreThanZero(amount) {
         require(s_accountToTokenDeposits[msg.sender][token] >= amount, "Not enough funds");
+        // emit Withdraw(msg.sender, token, amount);
         _pullFunds(msg.sender, token, amount);
         require(healthFactor(msg.sender) >= MIN_HEALH_FACTOR, "Platform will go insolvent!");
     }
 
-    function _pullFunds(address account, address token, uint256 amount) private {
+    function _pullFunds(
+        address account,
+        address token,
+        uint256 amount
+    ) private {
         require(s_accountToTokenDeposits[account][token] >= amount, "Not enough funds to withdraw");
         s_accountToTokenDeposits[account][token] -= amount;
         bool success = IERC20(token).transfer(msg.sender, amount);
+        // if (!success) revert TransferFailed();
     }
 
-    function borrow(address token, uint256 amount) external {
+    function borrow(address token, uint256 amount)
+        external
+        // nonReentrant
+        // isAllowedToken(token)
+        // moreThanZero(amount)
+    {
         require(IERC20(token).balanceOf(address(this)) >= amount, "Not enough tokens to borrow");
         s_accountToTokenBorrows[msg.sender][token] += amount;
+        // emit Borrow(msg.sender, token, amount);
         bool success = IERC20(token).transfer(msg.sender, amount);
+        // if (!success) revert TransferFailed();
         require(healthFactor(msg.sender) >= MIN_HEALH_FACTOR, "Platform will go insolvent!");
     }
 
-    function liquidate(address account, address repayToken, address rewardToken) external {
+    function liquidate(
+        address account,
+        address repayToken,
+        address rewardToken
+    ) external nonReentrant {
         require(healthFactor(account) < MIN_HEALH_FACTOR, "Account can't be liquidated!");
         uint256 halfDebt = s_accountToTokenBorrows[account][repayToken] / 2;
         uint256 halfDebtInEth = getEthValue(repayToken, halfDebt);
@@ -48,20 +97,38 @@ contract Lending {
             rewardToken,
             rewardAmountInEth + halfDebtInEth
         );
+        // emit Liquidate(account, repayToken, rewardToken, halfDebtInEth, msg.sender);
         _repay(account, repayToken, halfDebt);
         _pullFunds(account, rewardToken, totalRewardAmountInRewardToken);
     }
 
-    function repay(address token, uint256 amount) external {
+    function repay(address token, uint256 amount)
+        external
+        // nonReentrant
+        // isAllowedToken(token)
+        // moreThanZero(amount)
+    {
+        // emit Repay(msg.sender, token, amount);
         _repay(msg.sender, token, amount);
     }
 
-    function _repay(address account, address token, uint256 amount) private {
+    function _repay(
+        address account,
+        address token,
+        uint256 amount
+    ) private {
+        // require(s_accountToTokenBorrows[account][token] - amount >= 0, "Repayed too much!");
+        // On 0.8+ of solidity, it auto reverts math that would drop below 0 for a uint256
         s_accountToTokenBorrows[account][token] -= amount;
         bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
+        // if (!success) revert TransferFailed();
     }
 
-    function getAccountInformation(address user) public view returns (uint256 borrowedValueInETH, uint256 collateralValueInETH) {
+    function getAccountInformation(address user)
+        public
+        view
+        returns (uint256 borrowedValueInETH, uint256 collateralValueInETH)
+    {
         borrowedValueInETH = getAccountBorrowedValue(user);
         collateralValueInETH = getAccountCollateralValue(user);
     }
@@ -115,6 +182,22 @@ contract Lending {
     }
 
     /********************/
+    /* Modifiers */
+    /********************/
+
+    // modifier isAllowedToken(address token) {
+    //     if (s_tokenToPriceFeed[token] == address(0)) revert TokenNotAllowed(token);
+    //     _;
+    // }
+
+    // modifier moreThanZero(uint256 amount) {
+    //     if (amount == 0) {
+    //         revert NeedsMoreThanZero();
+    //     }
+    //     _;
+    // }
+
+    /********************/
     /* DAO / OnlyOwner Functions */
     /********************/
     function setAllowedToken(address token, address priceFeed) external onlyOwner {
@@ -130,5 +213,12 @@ contract Lending {
             s_allowedTokens.push(token);
         }
         s_tokenToPriceFeed[token] = priceFeed;
+        // emit AllowedTokenSet(token, priceFeed);
     }
+
+    /********************/
+    /* Getter Functions */
+    /********************/
+    // Ideally, we'd have getter functions for all our s_ variables we want exposed, and set them all to private.
+    // But, for the purpose of this demo, we've left them public for simplicity.
 }
